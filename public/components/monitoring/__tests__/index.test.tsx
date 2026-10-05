@@ -7,9 +7,14 @@ import userEvent from '@testing-library/user-event';
 import React from 'react';
 
 import { render, screen, waitFor, within } from '../../../../test/test_utils';
-import { Monitoring } from '../index';
+import {
+  Monitoring,
+  getResourceSharingAvailableTypes,
+  isResourceSharingEnabledForDataSource,
+} from '../index';
 import * as useMonitoringExports from '../use_monitoring';
 import { APIProvider } from '../../../apis/api_provider';
+import { InnerHttpProvider } from '../../../apis/inner_http_provider';
 import { applicationServiceMock, chromeServiceMock } from '../../../../../../src/core/public/mocks';
 import { navigationPluginMock } from '../../../../../../src/plugins/navigation/public/mocks';
 
@@ -396,5 +401,151 @@ describe('<Monitoring />', () => {
     setup({}, true);
 
     expect(screen.queryByLabelText('total number of results')).toBe(null);
+  });
+
+  describe('resource sharing Access column gating', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    const mockResourceSharingResponses = (enabled: boolean, types: string[]) => {
+      const get = jest.fn(async (path: string) => {
+        if (path === '/api/v1/auth/dashboardsinfo') {
+          return { resource_sharing_enabled: enabled };
+        }
+        return { types: types.map((type) => ({ type })) };
+      });
+      jest.spyOn(InnerHttpProvider, 'getHttp').mockReturnValue({ get } as any);
+      return get;
+    };
+
+    it('should render the Access column when the selected data source supports ml-model-group sharing', async () => {
+      mockResourceSharingResponses(true, ['ml-model-group']);
+      setup();
+      await waitFor(() =>
+        expect(screen.getByRole('columnheader', { name: 'Access' })).toBeInTheDocument()
+      );
+    });
+
+    it('should NOT render the Access column when resource sharing is disabled on the data source', async () => {
+      const get = mockResourceSharingResponses(false, ['ml-model-group']);
+      setup();
+      await waitFor(() => expect(get).toHaveBeenCalled());
+      expect(screen.queryByRole('columnheader', { name: 'Access' })).not.toBeInTheDocument();
+    });
+
+    it('should NOT render the Access column when ml-model-group is not a shareable type', async () => {
+      const get = mockResourceSharingResponses(true, ['workflow']);
+      setup();
+      await waitFor(() => expect(get).toHaveBeenCalledWith('/api/resource/types', { query: {} }));
+      expect(screen.queryByRole('columnheader', { name: 'Access' })).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('getResourceSharingAvailableTypes', () => {
+  const mockHttpGet = (implementation: (path: string, options?: any) => Promise<any>) => {
+    const get = jest.fn(implementation);
+    jest.spyOn(InnerHttpProvider, 'getHttp').mockReturnValue({ get } as any);
+    return get;
+  };
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('returns an empty list when resource sharing is disabled on the data source', async () => {
+    mockHttpGet(async (path) => {
+      if (path === '/api/v1/auth/dashboardsinfo') {
+        return { resource_sharing_enabled: false };
+      }
+      return { types: [{ type: 'ml-model-group' }] };
+    });
+    expect(await getResourceSharingAvailableTypes()).toEqual([]);
+  });
+
+  it('returns the registered types when resource sharing is enabled', async () => {
+    mockHttpGet(async (path) => {
+      if (path === '/api/v1/auth/dashboardsinfo') {
+        return { resource_sharing_enabled: true };
+      }
+      return { types: [{ type: 'ml-model-group' }, { type: 'workflow' }, {}] };
+    });
+    expect(await getResourceSharingAvailableTypes()).toEqual(['ml-model-group', 'workflow']);
+  });
+
+  it('supports a bare array response from the types endpoint', async () => {
+    mockHttpGet(async (path) => {
+      if (path === '/api/v1/auth/dashboardsinfo') {
+        return { resource_sharing_enabled: true };
+      }
+      return [{ type: 'ml-model-group' }];
+    });
+    expect(await getResourceSharingAvailableTypes()).toEqual(['ml-model-group']);
+  });
+
+  it('passes the data source id as a query parameter to both endpoints', async () => {
+    const get = mockHttpGet(async (path) => {
+      if (path === '/api/v1/auth/dashboardsinfo') {
+        return { resource_sharing_enabled: true };
+      }
+      return { types: [{ type: 'ml-model-group' }] };
+    });
+    await getResourceSharingAvailableTypes('data-source-1');
+    expect(get).toHaveBeenCalledWith('/api/v1/auth/dashboardsinfo', {
+      query: { dataSourceId: 'data-source-1' },
+    });
+    expect(get).toHaveBeenCalledWith('/api/resource/types', {
+      query: { dataSourceId: 'data-source-1' },
+    });
+  });
+
+  it('omits the data source id from the query when not provided', async () => {
+    const get = mockHttpGet(async () => ({ resource_sharing_enabled: false }));
+    await getResourceSharingAvailableTypes();
+    expect(get).toHaveBeenCalledWith('/api/v1/auth/dashboardsinfo', { query: {} });
+  });
+
+  it('returns an empty list when the probe fails', async () => {
+    mockHttpGet(async () => {
+      throw new Error('network error');
+    });
+    expect(await getResourceSharingAvailableTypes()).toEqual([]);
+  });
+});
+
+describe('Access column staleness guard logic', () => {
+  // Direct unit coverage of the guard used in Monitoring's render: the
+  // resourceSharingEnabled prop passed to ModelDeploymentTable must only
+  // trust `resourceSharing.types` when it was resolved for the currently
+  // selected data source. getResourceSharingAvailableTypes(...) is async,
+  // so on a data-source switch, `resourceSharing.types` still holds the
+  // previous data source's result until the new probe resolves.
+  it('is enabled once types resolve for the currently selected data source', () => {
+    const resourceSharing = { dataSourceId: 'ds-a', types: ['ml-model-group'] };
+    expect(isResourceSharingEnabledForDataSource(resourceSharing, 'ds-a', 'ml-model-group')).toBe(
+      true
+    );
+  });
+
+  it('is disabled while a resolved result belongs to a data source other than the one now selected', () => {
+    const resourceSharing = { dataSourceId: 'ds-a', types: ['ml-model-group'] };
+    expect(isResourceSharingEnabledForDataSource(resourceSharing, 'ds-b', 'ml-model-group')).toBe(
+      false
+    );
+  });
+
+  it('is disabled before any result has resolved for the currently selected data source', () => {
+    const resourceSharing = { dataSourceId: undefined, types: [] };
+    expect(isResourceSharingEnabledForDataSource(resourceSharing, 'ds-a', 'ml-model-group')).toBe(
+      false
+    );
+  });
+
+  it('is disabled once the current data source resolves but does not register the resource type', () => {
+    const resourceSharing = { dataSourceId: 'ds-a', types: ['workflow'] };
+    expect(isResourceSharingEnabledForDataSource(resourceSharing, 'ds-a', 'ml-model-group')).toBe(
+      false
+    );
   });
 });

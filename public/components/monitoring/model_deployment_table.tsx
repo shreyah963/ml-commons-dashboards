@@ -23,6 +23,12 @@ import {
 
 import { MODEL_STATE } from '../../../common';
 
+/**
+ * Resource type registered by the ml-commons backend plugin with the security
+ * plugin's resource-sharing framework. Sharing is model-group scoped.
+ */
+export const ML_MODEL_GROUP_RESOURCE_TYPE = 'ml-model-group';
+
 export interface ModelDeploymentTableSort {
   field: 'name' | 'model_state' | 'id';
   direction: Direction;
@@ -37,6 +43,7 @@ export interface ModelDeploymentItem {
   id: string;
   name: string;
   model_state?: MODEL_STATE;
+  model_group_id?: string;
   respondingNodesCount: number | undefined;
   planningNodesCount: number | undefined;
   notRespondingNodesCount: number | undefined;
@@ -61,6 +68,11 @@ export interface ModelDeploymentTableProps {
   onChange: (criteria: ModelDeploymentTableCriteria) => void;
   onViewDetail?: (modelDeploymentItem: ModelDeploymentItem) => void;
   onResetSearchClick?: () => void;
+  /**
+   * When true, renders a Share column with resource-sharing SPI markers that
+   * security-dashboards-plugin fulfills with its centralized share button.
+   */
+  resourceSharingEnabled?: boolean;
 }
 
 export const ModelDeploymentTable = ({
@@ -72,6 +84,7 @@ export const ModelDeploymentTable = ({
   onChange,
   onViewDetail,
   onResetSearchClick,
+  resourceSharingEnabled,
 }: ModelDeploymentTableProps) => {
   const columns = useMemo(
     () => [
@@ -168,6 +181,27 @@ export const ModelDeploymentTable = ({
           </>
         ),
       },
+      ...(resourceSharingEnabled
+        ? [
+            {
+              // Resource-sharing SPI marker column: the centralized Share
+              // button (for the model's model group) is mounted here by
+              // security-dashboards-plugin when installed and enabled.
+              field: 'model_group_id',
+              name: 'Access',
+              width: '5%',
+              render: (modelGroupId: string | undefined) =>
+                modelGroupId ? (
+                  <div
+                    data-resource-share-button
+                    data-resource-id={modelGroupId}
+                    data-resource-type={ML_MODEL_GROUP_RESOURCE_TYPE}
+                    data-resource-share-display="icon"
+                  />
+                ) : null,
+            },
+          ]
+        : []),
       {
         field: 'id',
         name: 'Action',
@@ -189,7 +223,7 @@ export const ModelDeploymentTable = ({
         },
       },
     ],
-    [onViewDetail]
+    [onViewDetail, resourceSharingEnabled]
   );
   const sorting = useMemo(() => ({ sort }), [sort]);
 

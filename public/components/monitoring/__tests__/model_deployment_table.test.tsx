@@ -315,4 +315,61 @@ describe('<DeployedModelTable />', () => {
       })
     );
   });
+
+  describe('resource sharing Access column', () => {
+    const itemsWithGroup = [
+      {
+        id: 'model-1-id',
+        name: 'model 1 name',
+        model_group_id: 'model-group-1',
+        respondingNodesCount: 1,
+        notRespondingNodesCount: 0,
+        planningNodesCount: 1,
+        planningWorkerNodes: [],
+        source: 'Local',
+      },
+      {
+        // no model_group_id -> cell should render nothing
+        id: 'model-2-id',
+        name: 'model 2 name',
+        respondingNodesCount: 1,
+        notRespondingNodesCount: 0,
+        planningNodesCount: 1,
+        planningWorkerNodes: [],
+        source: 'Local',
+      },
+    ];
+
+    it('renders the Access column and a share-button marker only for rows with a model_group_id when resourceSharingEnabled is true', () => {
+      const {
+        result: { container },
+      } = setup({ items: itemsWithGroup, resourceSharingEnabled: true });
+
+      expect(screen.getByRole('columnheader', { name: 'Access' })).toBeInTheDocument();
+
+      const markers = container.querySelectorAll('[data-resource-share-button]');
+      expect(markers).toHaveLength(1);
+      expect(markers[0].getAttribute('data-resource-id')).toBe('model-group-1');
+      expect(markers[0].getAttribute('data-resource-type')).toBe('ml-model-group');
+      expect(markers[0].getAttribute('data-resource-share-display')).toBe('icon');
+    });
+
+    it('does not render the Access column or any marker when resourceSharingEnabled is false', () => {
+      const {
+        result: { container },
+      } = setup({ items: itemsWithGroup, resourceSharingEnabled: false });
+
+      expect(screen.queryByRole('columnheader', { name: 'Access' })).not.toBeInTheDocument();
+      expect(container.querySelector('[data-resource-share-button]')).toBeNull();
+    });
+
+    it('does not render the Access column when resourceSharingEnabled is omitted (defaults off)', () => {
+      const {
+        result: { container },
+      } = setup({ items: itemsWithGroup });
+
+      expect(screen.queryByRole('columnheader', { name: 'Access' })).not.toBeInTheDocument();
+      expect(container.querySelector('[data-resource-share-button]')).toBeNull();
+    });
+  });
 });

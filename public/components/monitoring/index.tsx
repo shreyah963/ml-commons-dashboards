@@ -12,16 +12,63 @@ import {
   EuiText,
   EuiFilterGroup,
 } from '@elastic/eui';
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { FormattedMessage } from '@osd/i18n/react';
 
 import { ModelDeploymentProfile } from '../../apis/profile';
 import { PreviewPanel } from '../preview_panel';
 import { ApplicationStart, ChromeStart } from '../../../../../src/core/public';
 import { NavigationPublicPluginStart } from '../../../../../src/plugins/navigation/public';
+import { InnerHttpProvider } from '../../apis/inner_http_provider';
 
-import { ModelDeploymentItem, ModelDeploymentTable } from './model_deployment_table';
+import {
+  ML_MODEL_GROUP_RESOURCE_TYPE,
+  ModelDeploymentItem,
+  ModelDeploymentTable,
+} from './model_deployment_table';
 import { useMonitoring } from './use_monitoring';
+
+/**
+ * Resource-sharing types available on the given data source (feature flag +
+ * per-type list). Returns [] when disabled or on error.
+ */
+/**
+ * Whether the Access column may be shown for a resource type on the currently selected data source.
+ *
+ * The probed types are only trustworthy when they were resolved for the data source that is
+ * selected now: {@link getResourceSharingAvailableTypes} is async, so during a switch the previous
+ * source's result is still in state until the new probe settles. Exported so the component and its
+ * tests share one definition rather than each carrying a copy that can drift.
+ */
+export const isResourceSharingEnabledForDataSource = (
+  resourceSharing: { dataSourceId: string | undefined | symbol; types: string[] },
+  selectedDataSourceId: string | undefined | symbol,
+  resourceType: string
+): boolean =>
+  resourceSharing.dataSourceId === selectedDataSourceId &&
+  resourceSharing.types.includes(resourceType);
+
+export const getResourceSharingAvailableTypes = async (
+  resourceDataSourceId?: string
+): Promise<string[]> => {
+  try {
+    const http = InnerHttpProvider.getHttp();
+    const query = resourceDataSourceId ? { dataSourceId: resourceDataSourceId } : {};
+    // Global gate: resource sharing must be enabled on the selected data source.
+    const info: any = await http.get('/api/v1/auth/dashboardsinfo', { query });
+    if (!info?.resource_sharing_enabled) {
+      return [];
+    }
+    // Per-type gate: the registered/protected shareable types on that source.
+    const typesResp: any = await http.get('/api/resource/types', { query });
+    const rawTypes = Array.isArray(typesResp) ? typesResp : (typesResp?.types ?? []);
+    return rawTypes
+      .map((entry: { type: string }) => entry?.type)
+      .filter((type: string | undefined): type is string => Boolean(type));
+  } catch (e) {
+    return [];
+  }
+};
 import { ModelStatusFilter } from './model_status_filter';
 import { SearchBar } from './search_bar';
 import { ModelSourceFilter } from './model_source_filter';
@@ -55,7 +102,35 @@ export const Monitoring = (props: MonitoringProps) => {
     model: ModelDeploymentItem;
     dataSourceId: string | undefined;
   } | null>(null);
+  const [resourceSharing, setResourceSharing] = useState<{
+    dataSourceId: string | undefined | symbol;
+    types: string[];
+  }>({ dataSourceId: undefined, types: [] });
   const searchInputRef = useRef<HTMLInputElement | null>();
+
+  // Probe the shareable resource types on mount and whenever the selected
+  // data source changes, so the Access column reflects the selected source.
+  useEffect(() => {
+    // Skip while the data source id is still being resolved or is invalid.
+    if (typeof params.dataSourceId === 'symbol') {
+      return;
+    }
+    let ignore = false;
+    getResourceSharingAvailableTypes(params.dataSourceId).then((types) => {
+      if (!ignore) {
+        setResourceSharing((previous) =>
+          previous.dataSourceId === params.dataSourceId &&
+          previous.types.length === 0 &&
+          types.length === 0
+            ? previous
+            : { dataSourceId: params.dataSourceId, types }
+        );
+      }
+    });
+    return () => {
+      ignore = true;
+    };
+  }, [params.dataSourceId]);
 
   const setInputRef = useCallback((node: HTMLInputElement | null) => {
     searchInputRef.current = node;
@@ -156,6 +231,11 @@ export const Monitoring = (props: MonitoringProps) => {
           onChange={handleTableChange}
           onViewDetail={handleViewDetail}
           onResetSearchClick={onResetSearch}
+          resourceSharingEnabled={isResourceSharingEnabledForDataSource(
+            resourceSharing,
+            params.dataSourceId,
+            ML_MODEL_GROUP_RESOURCE_TYPE
+          )}
         />
         {preview && (
           <PreviewPanel

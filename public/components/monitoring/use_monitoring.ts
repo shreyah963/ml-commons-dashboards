@@ -157,6 +157,7 @@ const fetchDeployedModels = async (
         return {
           id,
           name,
+          model_group_id: rest.model_group_id,
           respondingNodesCount: workerCount,
           planningNodesCount: planningCount,
           notRespondingNodesCount:

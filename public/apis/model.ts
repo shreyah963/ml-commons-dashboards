@@ -13,6 +13,7 @@ export interface ModelSearchItem {
   algorithm: string;
   model_state: string;
   model_version: string;
+  model_group_id?: string;
   current_worker_node_count: number;
   planning_worker_node_count: number;
   planning_worker_nodes: string[];
